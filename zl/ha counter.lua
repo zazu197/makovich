@@ -1,7 +1,9 @@
 local Players = game:GetService("Players")
 
 local TARGET_ANIM_ID = "129575827606461"
+
 local playerConnections = {}
+local playerDiedConnections = {}
 local inCooldown = {}
 
 local function awardPlayer(player, animationTrack)
@@ -21,22 +23,26 @@ local function setupCharacter(player, character)
 	task.spawn(function()
 		local humanoid = character:WaitForChild("Humanoid", 10)
 		if not humanoid then return end
-
 		local animator = humanoid:WaitForChild("Animator", 10)
 		if not animator then return end
-		
+
+		-- Disconnect previous HealthChanged connection
 		if playerConnections[player] then
 			playerConnections[player]:Disconnect()
 		end
-		
+
+		-- Disconnect previous Died connection
+		if playerDiedConnections[player] then
+			playerDiedConnections[player]:Disconnect()
+		end
+
 		local previousHealth = humanoid.Health
-		
+
 		playerConnections[player] = humanoid.HealthChanged:Connect(function(newHealth)
 			if newHealth < previousHealth then
 				for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
 					if track.Animation then
 						local id = string.match(track.Animation.AnimationId, "%d+")
-						
 						if id == TARGET_ANIM_ID then
 							awardPlayer(player, track)
 							break
@@ -46,8 +52,8 @@ local function setupCharacter(player, character)
 			end
 			previousHealth = newHealth
 		end)
-		
-		humanoid.Died:Connect(function()
+
+		playerDiedConnections[player] = humanoid.Died:Connect(function()
 			player:SetAttribute("HeartAttackScore", 0)
 			inCooldown[player] = nil
 		end)
@@ -58,7 +64,6 @@ local function onPlayerAdded(player)
 	player.CharacterAdded:Connect(function(character)
 		setupCharacter(player, character)
 	end)
-
 	if player.Character then
 		setupCharacter(player, player.Character)
 	end
@@ -74,6 +79,10 @@ Players.PlayerRemoving:Connect(function(player)
 	if playerConnections[player] then
 		playerConnections[player]:Disconnect()
 		playerConnections[player] = nil
+	end
+	if playerDiedConnections[player] then
+		playerDiedConnections[player]:Disconnect()
+		playerDiedConnections[player] = nil
 	end
 	inCooldown[player] = nil
 end)
