@@ -9,3 +9,5 @@ do later
 - [ ] mesh chams
 - [X] make mutants be able to crouch
 
+other
+- [x] intel changer
