@@ -4,3 +4,4 @@
 - lighting settings 
 - make mutant see radio
 - make mutants be able to crouch
+- try to force gun into your hands when your mutant via a remote or sum s
