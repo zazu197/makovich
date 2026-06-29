@@ -1,5 +1,6 @@
 priority
 - [ ] make mutant see radio
+- [ ] make 001 controler accessible from anywhere, not sitting on chair
 
 do later
 - [ ] lighting settings 
