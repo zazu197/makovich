@@ -7,5 +7,5 @@ do later
 - [ ] lighting settings 
 - [ ] skin changer w external meshes supported
 - [ ] mesh chams
-- [ ] make mutants be able to crouch
+- [X] make mutants be able to crouch
 
