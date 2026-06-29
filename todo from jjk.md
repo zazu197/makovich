@@ -1,7 +1,7 @@
 priority
 - [x] armour checker 🎉
 - [ ] make mutant see radio
-- [ ] try to force gun into your hands when your mutant via a remote or sum s
+- [x] intercepted the "disablebackpack" event and disabled it
 
 do later
 - [ ] lighting settings 
