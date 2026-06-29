@@ -1,13 +1,14 @@
 priority
-- [x] armour checker 🎉
 - [ ] make mutant see radio
-- [x] intercepted the "disablebackpack" event and disabled it
 
 do later
 - [ ] lighting settings 
 - [ ] skin changer w external meshes supported
-- [x] mesh chams
-- [X] make mutants be able to crouch
+- [ ] waypoint system
 
-other
+done 
 - [x] intel changer
+- [X] make mutants be able to crouch
+- [x] mesh chams
+- [x] intercepted the "disablebackpack" event and disabled it
+- [x] armour checker 🎉
