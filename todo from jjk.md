@@ -6,7 +6,7 @@ priority
 do later
 - [ ] lighting settings 
 - [ ] skin changer w external meshes supported
-- [ ] mesh chams
+- [x] mesh chams
 - [X] make mutants be able to crouch
 
 other
