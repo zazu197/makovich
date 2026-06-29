@@ -3,3 +3,4 @@
 - mesh chams
 - lighting settings 
 - make mutant see radio
+- make mutants be able to crouch
