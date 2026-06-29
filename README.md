@@ -1,5 +1,4 @@
 priority
-- [ ] make mutant see radio
 - [ ] make 001 controler accessible from anywhere, not sitting on chair
 
 do later
@@ -13,3 +12,4 @@ done
 - [x] mesh chams
 - [x] intercepted the "disablebackpack" event and disabled it
 - [x] armour checker 🎉
+- [x] make mutant see radio - became done when you enabled mutant backpack
