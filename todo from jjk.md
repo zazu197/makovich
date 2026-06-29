@@ -1,3 +1,4 @@
 - armour checker
 - skin changer w external meshes supported
 - mesh chams
+- lighting settings 
