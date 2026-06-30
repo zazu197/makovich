@@ -23,61 +23,113 @@ if not TracerFolder then
 	TracerFolder.Parent = Workspace
 end
 
-local currentMuzzleConnection: RBXScriptConnection? = nil
-local currentChildConnection: RBXScriptConnection? = nil
+local characterConnections = {}
+local weaponData = {}
+
+local function hasWeaponType(instance: Instance): boolean
+	if instance:GetAttribute("WeaponType") ~= nil then
+		return true
+	end
+
+	if instance:FindFirstChild("WeaponType") then
+		return true
+	end
+
+	return false
+end
+
+local function hasEnabledProperty(instance: Instance): boolean
+	local success, value = pcall(function()
+		return instance.Enabled
+	end)
+
+	return success and typeof(value) == "boolean"
+end
+
+local function isMuzzleTrigger(instance: Instance): boolean
+	if not hasEnabledProperty(instance) then
+		return false
+	end
+
+	if instance.Name == "MuzzleLight" then
+		return true
+	end
+
+	if instance:IsA("PointLight") or instance:IsA("SpotLight") or instance:IsA("SurfaceLight") then
+		local parent = instance.Parent
+		if parent and parent.Name == "Muzzle" then
+			return true
+		end
+	end
+
+	return false
+end
 
 local function getCharacter(): Model?
 	return LocalPlayer.Character
 end
 
-local function getMP5(character: Model): Instance?
-	return character:FindFirstChild("MP5")
-end
-
-local function getMuzzleLight(character: Model): Instance?
-	local mp5 = getMP5(character)
-	if not mp5 then
+local function getInstancePosition(instance: Instance?): Vector3?
+	if not instance then
 		return nil
 	end
 
-	local muzzle = mp5:FindFirstChild("Muzzle")
-	if not muzzle then
-		return nil
+	if instance:IsA("Attachment") then
+		return instance.WorldPosition
 	end
 
-	local muzzleLight = muzzle:FindFirstChild("MuzzleLight")
-	if not muzzleLight then
-		return nil
+	if instance:IsA("BasePart") then
+		return instance.Position
 	end
 
-	return muzzleLight
-end
+	local parent = instance.Parent
 
-local function getMuzzlePosition(): Vector3
-	local character = getCharacter()
-
-	if character then
-		local mp5 = character:FindFirstChild("MP5")
-
-		if mp5 then
-			local muzzle = mp5:FindFirstChild("Muzzle")
-
-			if muzzle then
-				if muzzle:IsA("Attachment") then
-					return muzzle.WorldPosition
-				end
-
-				if muzzle:IsA("BasePart") then
-					return muzzle.Position
-				end
-			end
-
-			local handle = mp5:FindFirstChild("Handle")
-			if handle and handle:IsA("BasePart") then
-				return handle.Position
-			end
+	if parent then
+		if parent:IsA("Attachment") then
+			return parent.WorldPosition
 		end
 
+		if parent:IsA("BasePart") then
+			return parent.Position
+		end
+	end
+
+	return nil
+end
+
+local function getMuzzlePosition(weaponRoot: Instance, sourceObject: Instance?): Vector3
+	local sourcePosition = getInstancePosition(sourceObject)
+	if sourcePosition then
+		return sourcePosition
+	end
+
+	local muzzle = weaponRoot:FindFirstChild("Muzzle", true)
+	local muzzlePosition = getInstancePosition(muzzle)
+
+	if muzzlePosition then
+		return muzzlePosition
+	end
+
+	local possibleNames = {
+		"FirePoint",
+		"Barrel",
+		"Tip",
+		"Suppressor",
+		"Silencer",
+		"Handle",
+	}
+
+	for _, name in ipairs(possibleNames) do
+		local object = weaponRoot:FindFirstChild(name, true)
+		local position = getInstancePosition(object)
+
+		if position then
+			return position
+		end
+	end
+
+	local character = getCharacter()
+	if character then
 		local head = character:FindFirstChild("Head")
 		if head and head:IsA("BasePart") then
 			return head.Position
@@ -100,6 +152,10 @@ end
 local function getTargetPosition(startPosition: Vector3): Vector3
 	local mousePosition = Mouse.Hit.Position
 	local direction = mousePosition - startPosition
+
+	if direction.Magnitude <= 0.05 then
+		return startPosition
+	end
 
 	if direction.Magnitude > Settings.MaxDistance then
 		return startPosition + direction.Unit * Settings.MaxDistance
@@ -143,60 +199,174 @@ local function playTracer(startPosition: Vector3, endPosition: Vector3)
 	Debris:AddItem(tracer, Settings.FadeTime + 0.1)
 end
 
-local function createTracerFromMuzzle()
+local function createTracerFromWeapon(weaponRoot: Instance, sourceObject: Instance?)
 	if not Settings.Enabled then
 		return
 	end
 
-	local startPosition = getMuzzlePosition()
+	if not hasWeaponType(weaponRoot) then
+		return
+	end
+
+	local character = getCharacter()
+	if not character or not weaponRoot:IsDescendantOf(character) then
+		return
+	end
+
+	local startPosition = getMuzzlePosition(weaponRoot, sourceObject)
 	local endPosition = getTargetPosition(startPosition)
 
 	playTracer(startPosition, endPosition)
 end
 
-local function connectMuzzleLight(character: Model)
-	if currentMuzzleConnection then
-		currentMuzzleConnection:Disconnect()
-		currentMuzzleConnection = nil
-	end
-
-	local muzzleLight = getMuzzleLight(character)
-	if not muzzleLight then
+local function disconnectWeapon(weaponRoot: Instance)
+	local data = weaponData[weaponRoot]
+	if not data then
 		return
 	end
 
-	if not muzzleLight:IsA("Light") then
+	for _, connection in pairs(data.Connections) do
+		if typeof(connection) == "RBXScriptConnection" then
+			connection:Disconnect()
+		end
+	end
+
+	for _, connection in pairs(data.MuzzleConnections) do
+		if typeof(connection) == "RBXScriptConnection" then
+			connection:Disconnect()
+		end
+	end
+
+	weaponData[weaponRoot] = nil
+end
+
+local function connectMuzzleTrigger(weaponRoot: Instance, muzzleObject: Instance)
+	local data = weaponData[weaponRoot]
+	if not data then
 		return
 	end
 
-	currentMuzzleConnection = muzzleLight:GetPropertyChangedSignal("Enabled"):Connect(function()
-		if muzzleLight.Enabled then
-			createTracerFromMuzzle()
+	if data.MuzzleConnections[muzzleObject] then
+		return
+	end
+
+	if not isMuzzleTrigger(muzzleObject) then
+		return
+	end
+
+	data.MuzzleConnections[muzzleObject] = muzzleObject:GetPropertyChangedSignal("Enabled"):Connect(function()
+		if muzzleObject.Enabled then
+			createTracerFromWeapon(weaponRoot, muzzleObject)
 		end
 	end)
 end
 
-local function watchCharacter(character: Model)
-	if currentMuzzleConnection then
-		currentMuzzleConnection:Disconnect()
-		currentMuzzleConnection = nil
+local function scanMuzzlesForWeapon(weaponRoot: Instance)
+	local data = weaponData[weaponRoot]
+	if not data then
+		return
 	end
 
-	if currentChildConnection then
-		currentChildConnection:Disconnect()
-		currentChildConnection = nil
+	for _, descendant in ipairs(weaponRoot:GetDescendants()) do
+		if isMuzzleTrigger(descendant) then
+			connectMuzzleTrigger(weaponRoot, descendant)
+		end
 	end
+end
+
+local function connectWeapon(weaponRoot: Instance)
+	if weaponData[weaponRoot] then
+		scanMuzzlesForWeapon(weaponRoot)
+		return
+	end
+
+	if not hasWeaponType(weaponRoot) then
+		return
+	end
+
+	local character = getCharacter()
+	if not character or not weaponRoot:IsDescendantOf(character) then
+		return
+	end
+
+	weaponData[weaponRoot] = {
+		Connections = {},
+		MuzzleConnections = {},
+	}
+
+	local data = weaponData[weaponRoot]
+
+	table.insert(data.Connections, weaponRoot.DescendantAdded:Connect(function(descendant)
+		if isMuzzleTrigger(descendant) then
+			connectMuzzleTrigger(weaponRoot, descendant)
+		end
+	end))
+
+	table.insert(data.Connections, weaponRoot.AncestryChanged:Connect(function()
+		local currentCharacter = getCharacter()
+
+		if not currentCharacter or not weaponRoot:IsDescendantOf(currentCharacter) then
+			disconnectWeapon(weaponRoot)
+		end
+	end))
+
+	table.insert(data.Connections, weaponRoot:GetAttributeChangedSignal("WeaponType"):Connect(function()
+		if hasWeaponType(weaponRoot) then
+			scanMuzzlesForWeapon(weaponRoot)
+		else
+			disconnectWeapon(weaponRoot)
+		end
+	end))
+
+	scanMuzzlesForWeapon(weaponRoot)
+end
+
+local function scanCharacterForWeapons(character: Model)
+	for _, descendant in ipairs(character:GetDescendants()) do
+		if hasWeaponType(descendant) then
+			connectWeapon(descendant)
+		end
+	end
+end
+
+local scanQueued = false
+
+local function queueCharacterScan(character: Model)
+	if scanQueued then
+		return
+	end
+
+	scanQueued = true
 
 	task.defer(function()
-		connectMuzzleLight(character)
-	end)
+		scanQueued = false
 
-	currentChildConnection = character.ChildAdded:Connect(function(child)
-		if child.Name == "MP5" then
-			task.wait()
-			connectMuzzleLight(character)
+		if character.Parent then
+			scanCharacterForWeapons(character)
 		end
 	end)
+end
+
+local function disconnectCharacter()
+	for _, connection in ipairs(characterConnections) do
+		connection:Disconnect()
+	end
+
+	table.clear(characterConnections)
+
+	for weaponRoot in pairs(weaponData) do
+		disconnectWeapon(weaponRoot)
+	end
+end
+
+local function watchCharacter(character: Model)
+	disconnectCharacter()
+
+	scanCharacterForWeapons(character)
+
+	table.insert(characterConnections, character.DescendantAdded:Connect(function()
+		queueCharacterScan(character)
+	end))
 end
 
 if LocalPlayer.Character then
