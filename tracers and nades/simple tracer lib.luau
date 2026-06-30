@@ -1,67 +1,92 @@
-local TweenService = game:GetService("TweenService")
-local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 
 local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
 
-local TracerLibrary = {
+local Settings = {
 	Enabled = true,
 	Color = Color3.fromRGB(255, 0, 0),
-	Thickness = 0.1,
+	Thickness = 0.12,
 	Transparency = 0,
-	FadeTime = 0.5,
+	FadeTime = 0.35,
 	Material = Enum.Material.Neon,
-	
-	_hook = nil
+	MaxDistance = 1000,
 }
 
-local Folder = Workspace:FindFirstChild("TracerFolder")
-if not Folder then
-	Folder = Instance.new("Folder")
-	Folder.Name = "TracerFolder"
-	Folder.Parent = Workspace
+local TracerFolder = Workspace:FindFirstChild("TracerFolder")
+if not TracerFolder then
+	TracerFolder = Instance.new("Folder")
+	TracerFolder.Name = "TracerFolder"
+	TracerFolder.Parent = Workspace
 end
 
-local function track(object, lifetime)
-	Debris:AddItem(object, lifetime)
-end
+local currentMuzzleConnection: RBXScriptConnection? = nil
+local currentChildConnection: RBXScriptConnection? = nil
 
-local function getCharacter()
+local function getCharacter(): Model?
 	return LocalPlayer.Character
 end
 
-local function getMuzzlePosition()
+local function getMP5(character: Model): Instance?
+	return character:FindFirstChild("MP5")
+end
+
+local function getMuzzleLight(character: Model): Instance?
+	local mp5 = getMP5(character)
+	if not mp5 then
+		return nil
+	end
+
+	local muzzle = mp5:FindFirstChild("Muzzle")
+	if not muzzle then
+		return nil
+	end
+
+	local muzzleLight = muzzle:FindFirstChild("MuzzleLight")
+	if not muzzleLight then
+		return nil
+	end
+
+	return muzzleLight
+end
+
+local function getMuzzlePosition(): Vector3
 	local character = getCharacter()
-	if not character then return Vector3.new(0, 0, 0) end
 
-	local tool = nil
-	for _, child in ipairs(character:GetChildren()) do
-		if child:IsA("Tool") then
-			tool = child
-			break
+	if character then
+		local mp5 = character:FindFirstChild("MP5")
+
+		if mp5 then
+			local muzzle = mp5:FindFirstChild("Muzzle")
+
+			if muzzle then
+				if muzzle:IsA("Attachment") then
+					return muzzle.WorldPosition
+				end
+
+				if muzzle:IsA("BasePart") then
+					return muzzle.Position
+				end
+			end
+
+			local handle = mp5:FindFirstChild("Handle")
+			if handle and handle:IsA("BasePart") then
+				return handle.Position
+			end
 		end
-	end
 
-	if tool then
-		local muzzle = tool:FindFirstChild("Muzzle", true)
-		if muzzle then
-			if muzzle:IsA("Attachment") then return muzzle.WorldPosition end
-			if muzzle:IsA("BasePart") then return muzzle.Position end
+		local head = character:FindFirstChild("Head")
+		if head and head:IsA("BasePart") then
+			return head.Position
 		end
 
-		local handle = tool:FindFirstChild("Handle")
-		if handle and handle:IsA("BasePart") then return handle.Position end
-	end
-
-	local head = character:FindFirstChild("Head")
-	if head and head:IsA("BasePart") then
-		return head.Position
-	end
-
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root and root:IsA("BasePart") then
-		return root.Position
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if root and root:IsA("BasePart") then
+			return root.Position
+		end
 	end
 
 	local camera = Workspace.CurrentCamera
@@ -69,106 +94,113 @@ local function getMuzzlePosition()
 		return camera.CFrame.Position
 	end
 
-	return Vector3.new(0, 0, 0)
+	return Vector3.zero
 end
 
-local function playTracer(startPosition, endPosition)
-	local distance = (endPosition - startPosition).Magnitude
+local function getTargetPosition(startPosition: Vector3): Vector3
+	local mousePosition = Mouse.Hit.Position
+	local direction = mousePosition - startPosition
 
-	if distance <= 0 then return end
+	if direction.Magnitude > Settings.MaxDistance then
+		return startPosition + direction.Unit * Settings.MaxDistance
+	end
 
-	local part = Instance.new("Part")
-	part.Name = "TracerLine"
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanTouch = false
-	part.CanQuery = false
-	part.CastShadow = false
-	part.Material = TracerLibrary.Material
-	part.Color = TracerLibrary.Color
-	part.Transparency = TracerLibrary.Transparency
-	part.Size = Vector3.new(TracerLibrary.Thickness, TracerLibrary.Thickness, distance)
-	part.CFrame = CFrame.lookAt(startPosition, endPosition) * CFrame.new(0, 0, -distance / 2)
-	part.Parent = Folder
+	return mousePosition
+end
 
-	TweenService:Create(
-		part,
-		TweenInfo.new(TracerLibrary.FadeTime, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+local function playTracer(startPosition: Vector3, endPosition: Vector3)
+	local direction = endPosition - startPosition
+	local distance = direction.Magnitude
+
+	if distance <= 0.05 then
+		return
+	end
+
+	local tracer = Instance.new("Part")
+	tracer.Name = "TracerLine"
+	tracer.Anchored = true
+	tracer.CanCollide = false
+	tracer.CanTouch = false
+	tracer.CanQuery = false
+	tracer.CastShadow = false
+	tracer.Material = Settings.Material
+	tracer.Color = Settings.Color
+	tracer.Transparency = Settings.Transparency
+	tracer.Size = Vector3.new(Settings.Thickness, Settings.Thickness, distance)
+	tracer.CFrame = CFrame.lookAt(startPosition, endPosition) * CFrame.new(0, 0, -distance / 2)
+	tracer.Parent = TracerFolder
+
+	local tween = TweenService:Create(
+		tracer,
+		TweenInfo.new(Settings.FadeTime, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
 		{
 			Transparency = 1,
-			Size = Vector3.new(0, 0, distance)
+			Size = Vector3.new(0.01, 0.01, distance),
 		}
-	):Play()
+	)
 
-	track(part, TracerLibrary.FadeTime + 0.1)
+	tween:Play()
+	Debris:AddItem(tracer, Settings.FadeTime + 0.1)
 end
 
-function TracerLibrary:Start()
-	if self._hook then 
-		self.Enabled = true
-		return 
+local function createTracerFromMuzzle()
+	if not Settings.Enabled then
+		return
 	end
-	
-	local OldNamecall
-	OldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-		local method = getnamecallmethod()
-		local args = {...}
 
-		if not checkcaller() and TracerLibrary.Enabled and (method == "FireServer" or method == "InvokeServer") then
-			if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") then
-				
-				local function isPos(val)
-					if typeof(val) == "Vector3" then return val end
-					if typeof(val) == "CFrame" then return val.Position end
-					if typeof(val) == "Ray" then return val.Origin + val.Direction end
-					return nil
-				end
+	local startPosition = getMuzzlePosition()
+	local endPosition = getTargetPosition(startPosition)
 
-				local function searchTable(t)
-					for _, v in pairs(t) do
-						local p = isPos(v)
-						if p then return p end
-						if typeof(v) == "table" then
-							p = searchTable(v)
-							if p then return p end
-						end
-					end
-					return nil
-				end
+	playTracer(startPosition, endPosition)
+end
 
-				task.spawn(function()
-					local startPos = getMuzzlePosition()
-					local targetPos = nil
+local function connectMuzzleLight(character: Model)
+	if currentMuzzleConnection then
+		currentMuzzleConnection:Disconnect()
+		currentMuzzleConnection = nil
+	end
 
-					for _, arg in ipairs(args) do
-						local p = isPos(arg)
-						if not p and typeof(arg) == "table" then
-							p = searchTable(arg)
-						end
-						
-						if p and (p - startPos).Magnitude > 2 then
-							targetPos = p
-							break
-						end
-					end
+	local muzzleLight = getMuzzleLight(character)
+	if not muzzleLight then
+		return
+	end
 
-					if targetPos then
-						playTracer(startPos, targetPos)
-					end
-				end)
-			end
+	if not muzzleLight:IsA("Light") then
+		return
+	end
+
+	currentMuzzleConnection = muzzleLight:GetPropertyChangedSignal("Enabled"):Connect(function()
+		if muzzleLight.Enabled then
+			createTracerFromMuzzle()
 		end
-
-		return OldNamecall(self, ...)
 	end)
-	
-	self._hook = OldNamecall
-	warn("Bullet Tracer Library Started.")
 end
 
-function TracerLibrary:Stop()
-	self.Enabled = false
-	warn("Bullet Tracer Library Stopped. (Note: hook remains but is bypassed)")
+local function watchCharacter(character: Model)
+	if currentMuzzleConnection then
+		currentMuzzleConnection:Disconnect()
+		currentMuzzleConnection = nil
+	end
+
+	if currentChildConnection then
+		currentChildConnection:Disconnect()
+		currentChildConnection = nil
+	end
+
+	task.defer(function()
+		connectMuzzleLight(character)
+	end)
+
+	currentChildConnection = character.ChildAdded:Connect(function(child)
+		if child.Name == "MP5" then
+			task.wait()
+			connectMuzzleLight(character)
+		end
+	end)
 end
 
-return TracerLibrary
+if LocalPlayer.Character then
+	watchCharacter(LocalPlayer.Character)
+end
+
+LocalPlayer.CharacterAdded:Connect(watchCharacter)
