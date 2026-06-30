@@ -1,25 +1,3 @@
---[[
-    Blacksite Zeta - Single Local Moderator Console
-    File: ModeratorESP_LocalConsole.client.lua
-    Version: v17.15 server-verified Controller access code
-
-    Use:
-    - Run this as a LocalScript, or execute it from your in-game moderator console if that console runs code on the client.
-    - No UserId/admin table is used. It only appears for the player/client that executes this script.
-    - Press Enable ESP in the glass-style panel to turn visuals on.
-    - The UI opens automatically as soon as the script runs.
-    - Player overhead labels are smaller and fully disappear after about 150 studs.
-    - Team and player multi-select filters default to showing nobody until selected.
-    - Mutated/mutant players override team color with an alternating pink + status glow.
-    - Patient players use their normal team highlight again; authorization/hostility no longer changes non-mutant patient outlines.
-    - The fixed-width sidebar reveals six page choices without changing the console size: ESP, Exposure, Controller, Radio, Mutantization, and Customization.
-    - The professional glass UI keeps the original serif typography, with a restrained graphite/blue palette and optional ambience.
-
-    Notes:
-    - LocalScripts can only read data replicated to the client. Perks and PRM are handled through your game's replicated Player.Data / character attributes when available.
-    - Other players' Backpack/ammo contents are usually server-only. This script checks replicated slot/ammo attributes first, then equipped/visible tools as fallback.
-]]
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
