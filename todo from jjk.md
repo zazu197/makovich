@@ -4,6 +4,8 @@ priority
 - [ ] allow to equip multiple tools at once
 - [ ] make overhead ui smaller
 - [ ] custom gun skins
+- [ ] TEAM CHANGER
+- [ ] SIZE CHANGER
 
 do later
 - [ ] lighting settings 
