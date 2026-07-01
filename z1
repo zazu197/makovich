@@ -1,10 +1,10 @@
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+
 local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
+
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
+
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -19,14 +19,7 @@ if not PlayerGui then
 end
 
 local CONFIG = {
-    UiName = "ModeratorESP_LocalConsole_UI",
-    AdornmentFolderName = "ModeratorESP_LocalConsole_Adornments",
-    UpdateRate = 0.20,
-    MaxLabelDistance = 150,
-    LabelFullSizeDistance = 35,
-    LabelMinSizeDistance = 125,
-    LabelHideDistance = 150,
-    LabelMinScale = 0.46,
+  
     LabelFadeStartDistance = 118,
     HighlightFillTransparency = 0.87,
     HighlightOutlineTransparency = 0.18,
@@ -75,9 +68,7 @@ local CONFIG = {
     MutationSafeColor = Color3.fromRGB(145, 255, 170),
     MutationHostileColor = Color3.fromRGB(255, 181, 74),
     MutationColorPulseSpeed = 2.25,
-    MutationPulseSpeed = 3.5,
-    MutationOutlineTransparency = 0.02,
-    MutationFillOutlineOnlyTransparency = 1,
+    cy = 1,
     MutationFillCoveredTransparency = 0.32,
     RogueColor = Color3.fromRGB(130, 215, 255),
     DefaultTextColor = Color3.fromRGB(238, 238, 242),
@@ -170,48 +161,7 @@ local CONFIG = {
     PatientTeamNames = {
         "Patient",
         "Patients",
-        "Test Subject",
-        "Test Subjects",
-    },
-
-    PatientAuthorizedTags = {
-        "Authorized",
-        "Innocent",
-    },
-
-    PatientAuthorizedAttributes = {
-        "Authorized",
-        "IsAuthorized",
-        "PatientAuthorized",
-        "PatientAuthorization",
-        "Innocent",
-        "IsInnocent",
-    },
-
-    HostileTags = {
-        "Traitor",
-        "GlobalTraitor",
-        "Hostile",
-        "MarkedHostile",
-    },
-
-    HostileAttributes = {
-        "IsTraitor",
-        "Traitor",
-        "GlobalTraitor",
-        "Hostile",
-        "IsHostile",
-        "MarkedHostile",
-    },
-
-    SlotOneAttributeNames = {
-        "Slot1",
-        "Slot_1",
-        "Hotbar1",
-        "Hotbar_1",
-        "Toolbar1",
-        "Toolbar_1",
-        "Backpack1",
+    
         "Backpack_1",
         "BackpackSlot1",
         "BackpackSlot_1",
