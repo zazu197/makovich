@@ -1,5 +1,10 @@
 priority
 - [ ] make 001 controler accessible from anywhere, not sitting on chair
+- [ ] make mutant be able to pick up locker guns
+- [ ] auto heat percentage on 002
+- [ ] show conmines
+- [ ] show closed doors
+- [ ] flashlight uv with gun
 
 do later
 - [ ] lighting settings 
