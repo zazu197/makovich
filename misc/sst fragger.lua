@@ -7,11 +7,3 @@ LocalPlayer:GetAttributeChangedSignal("InProtectedArea"):Connect(function()
         LocalPlayer:SetAttribute("InProtectedArea", false)
     end
 end)
-
-return function(...)
-    LocalPlayer:SetAttribute("InProtectedArea", false)
-
-    return function()
-        LocalPlayer:SetAttribute("InprotectedArea", false)
-    end
-end
