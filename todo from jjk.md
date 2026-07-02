@@ -1,5 +1,5 @@
 priority
-- [ ] make 001 controler accessible from anywhere, not sitting on chair
+- [-] make 001 controler accessible from anywhere, not sitting on chair // IMPOSSIBLE I DONT KNOW HOW
 - [ ] allow for 002 controller to be on able to be controlled through integer inputs, to make the heat bar faster to fill up, insta fill
 - [ ] allow to equip multiple tools at once
 - [ ] custom gun skins
