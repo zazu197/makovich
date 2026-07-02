@@ -10,6 +10,7 @@ do later
 - [ ] make mutant see radio
 - [ ] allow mutants to be able to pick up things
 - [ ] size changer
+- [ ] show who sitting in 001 seat yeah
       
 done 
 - [x] intel changer and agility changer
