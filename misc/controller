@@ -1,0 +1,788 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    warn("[ControllerBridge] This must run as a LocalScript/client-side script.")
+    return
+end
+
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 20)
+
+local CONFIG = {
+    Debug = true,
+
+    -- Roblox uses Xbox-style names internally. On PlayStation controllers:
+    -- ButtonB is usually Circle, ButtonX is Square, ButtonY is Triangle, and ButtonA is Cross/X.
+    InteractButton = Enum.KeyCode.ButtonB, -- PS Circle / Xbox B -> E/interact
+    ReloadButton = Enum.KeyCode.ButtonX, -- PS Square / Xbox X -> R/reload
+    BackquoteButton = Enum.KeyCode.ButtonY, -- PS Triangle / Xbox Y -> `
+    JumpButton = Enum.KeyCode.ButtonA, -- PS Cross/X / Xbox A -> Space
+    NextItemButton = Enum.KeyCode.ButtonR1,
+    PreviousItemButton = Enum.KeyCode.ButtonL1,
+    SprintButton = Enum.KeyCode.ButtonL3,
+    CButton = Enum.KeyCode.ButtonR3,
+
+    InteractKeyboardKey = Enum.KeyCode.E,
+    ReloadKeyboardKey = Enum.KeyCode.R,
+    BackquoteKeyboardKey = Enum.KeyCode.Backquote,
+    JumpKeyboardKey = Enum.KeyCode.Space,
+    SprintKeyboardKey = Enum.KeyCode.LeftShift,
+    CKeyboardKey = Enum.KeyCode.C,
+
+    PromptInteractButton = Enum.KeyCode.ButtonB,
+    ActionPriority = 5000,
+    EquipCooldown = 0.12,
+
+    -- Stick fallback settings. Turn either to false if Roblox default controller controls feel doubled.
+    EnableCustomLeftStickMovement = true,
+    EnableCustomRightStickLook = true,
+    LeftStickDeadzone = 0.14,
+    RightStickDeadzone = 0.16,
+    LookSensitivityX = 2.35,
+    LookSensitivityY = 1.65,
+
+    -- L3 sprint behavior.
+    SprintIsToggle = true,
+    EnableWalkSpeedFallback = true,
+    SprintWalkSpeedMultiplier = 1.55,
+    MinimumSprintWalkSpeed = 22,
+}
+
+local state = {
+    lastEquip = 0,
+    leftStick = Vector2.zero,
+    rightStick = Vector2.zero,
+    sprintActive = false,
+    interactHeld = false,
+    preSprintWalkSpeed = nil,
+    gamepadDown = {},
+    overlay = {
+        closed = false,
+        collapsed = false,
+        dragging = false,
+        dragStart = nil,
+        panelStart = nil,
+        controls = {},
+    },
+}
+
+local function log(...)
+    if CONFIG.Debug then
+        print("[ControllerBridge]", ...)
+    end
+end
+
+local function getVirtualInputManager()
+    local ok, service = pcall(function()
+        return game:GetService("VirtualInputManager")
+    end)
+    if ok and service then
+        return service
+    end
+    return nil
+end
+
+local function sendKeyEvent(keyCode, isDown)
+    local virtualInput = getVirtualInputManager()
+    if not virtualInput then
+        return false
+    end
+    return pcall(function()
+        virtualInput:SendKeyEvent(isDown, keyCode, false, game)
+    end)
+end
+
+local function pressKeyboardKey(keyCode)
+    local downOk = sendKeyEvent(keyCode, true)
+    task.wait(0.035)
+    local upOk = sendKeyEvent(keyCode, false)
+    return downOk and upOk
+end
+
+local function getCharacter()
+    return LocalPlayer.Character
+end
+
+local function getHumanoid(character)
+    return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function getBackpack()
+    return LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:FindFirstChild("Backpack")
+end
+
+local function cleanStick(raw, deadzone)
+    local magnitude = raw.Magnitude
+    if magnitude <= deadzone then
+        return Vector2.zero
+    end
+    local scaled = (magnitude - deadzone) / math.max(1 - deadzone, 0.001)
+    return raw.Unit * math.clamp(scaled, 0, 1)
+end
+
+local function collectTools()
+    local tools = {}
+    local character = getCharacter()
+    local backpack = getBackpack()
+
+    local function addFrom(container)
+        if not container then
+            return
+        end
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Tool") then
+                table.insert(tools, child)
+            end
+        end
+    end
+
+    addFrom(character)
+    addFrom(backpack)
+
+    table.sort(tools, function(a, b)
+        local slotA = tonumber(a:GetAttribute("Slot") or a:GetAttribute("HotbarSlot") or a:GetAttribute("BackpackSlot") or a:GetAttribute("SlotNumber"))
+        local slotB = tonumber(b:GetAttribute("Slot") or b:GetAttribute("HotbarSlot") or b:GetAttribute("BackpackSlot") or b:GetAttribute("SlotNumber"))
+        if slotA and slotB and slotA ~= slotB then
+            return slotA < slotB
+        end
+        if slotA and not slotB then
+            return true
+        end
+        if slotB and not slotA then
+            return false
+        end
+        return a.Name < b.Name
+    end)
+
+    return tools
+end
+
+local function getEquippedToolIndex(tools)
+    local character = getCharacter()
+    if not character then
+        return nil
+    end
+    for index, tool in ipairs(tools) do
+        if tool.Parent == character then
+            return index
+        end
+    end
+    return nil
+end
+
+local function equipToolByDirection(direction)
+    local now = os.clock()
+    if now - state.lastEquip < CONFIG.EquipCooldown then
+        return
+    end
+    state.lastEquip = now
+
+    local character = getCharacter()
+    local humanoid = getHumanoid(character)
+    if not humanoid then
+        return
+    end
+
+    local tools = collectTools()
+    if #tools == 0 then
+        return
+    end
+
+    local currentIndex = getEquippedToolIndex(tools)
+    local nextIndex
+    if currentIndex then
+        nextIndex = ((currentIndex - 1 + direction) % #tools) + 1
+    else
+        nextIndex = direction >= 0 and 1 or #tools
+    end
+
+    local nextTool = tools[nextIndex]
+    if nextTool then
+        pcall(function()
+            humanoid:EquipTool(nextTool)
+        end)
+        log(direction > 0 and "Next item:" or "Previous item:", nextTool.Name)
+    end
+end
+
+local function configurePrompt(prompt)
+    if prompt and prompt:IsA("ProximityPrompt") then
+        pcall(function()
+            prompt.GamepadKeyCode = CONFIG.PromptInteractButton
+        end)
+    end
+end
+
+local function configureExistingPrompts()
+    for _, descendant in ipairs(Workspace:GetDescendants()) do
+        if descendant:IsA("ProximityPrompt") then
+            configurePrompt(descendant)
+        end
+    end
+end
+
+local function setControlActive(name, active)
+    local control = state.overlay.controls[name]
+    if not control then
+        return
+    end
+    local color = active and Color3.fromRGB(215, 218, 224) or control.BaseColor
+    local textColor = active and Color3.fromRGB(20, 22, 26) or Color3.fromRGB(190, 196, 208)
+    for _, object in ipairs(control.Objects) do
+        if object and object.Parent then
+            if object:IsA("GuiObject") then
+                object.BackgroundColor3 = color
+            end
+            if object:IsA("TextLabel") or object:IsA("TextButton") then
+                object.TextColor3 = textColor
+            end
+        end
+    end
+end
+
+local function refreshOverlayStates()
+    if state.overlay.closed then
+        return
+    end
+
+    setControlActive("Circle", state.gamepadDown[CONFIG.InteractButton] == true or state.interactHeld)
+    setControlActive("Square", state.gamepadDown[CONFIG.ReloadButton] == true)
+    setControlActive("Triangle", state.gamepadDown[CONFIG.BackquoteButton] == true)
+    setControlActive("Cross", state.gamepadDown[CONFIG.JumpButton] == true)
+    setControlActive("L1", state.gamepadDown[CONFIG.PreviousItemButton] == true)
+    setControlActive("R1", state.gamepadDown[CONFIG.NextItemButton] == true)
+    setControlActive("L3", state.gamepadDown[CONFIG.SprintButton] == true or state.sprintActive)
+    setControlActive("R3", state.gamepadDown[CONFIG.CButton] == true)
+    setControlActive("LeftStick", state.leftStick.Magnitude > 0)
+    setControlActive("RightStick", state.rightStick.Magnitude > 0)
+end
+
+local function makeCorner(parent, radius)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = radius or UDim.new(0, 8)
+    corner.Parent = parent
+    return corner
+end
+
+local function makeStroke(parent, color, transparency, thickness)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color or Color3.fromRGB(84, 88, 98)
+    stroke.Transparency = transparency or 0.35
+    stroke.Thickness = thickness or 1
+    stroke.Parent = parent
+    return stroke
+end
+
+local function registerControl(name, objects, baseColor)
+    state.overlay.controls[name] = {
+        Objects = objects,
+        BaseColor = baseColor or Color3.fromRGB(58, 61, 69),
+    }
+end
+
+local function buildControllerOverlay()
+    if not PlayerGui or state.overlay.closed then
+        return
+    end
+
+    local old = PlayerGui:FindFirstChild("ControllerBridgeOverlayUI")
+    if old then
+        old:Destroy()
+    end
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "ControllerBridgeOverlayUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.IgnoreGuiInset = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Parent = PlayerGui
+
+    local panel = Instance.new("Frame")
+    panel.Name = "ControllerOverlay"
+    panel.Position = UDim2.fromOffset(14, 62)
+    panel.Size = UDim2.fromOffset(232, 138)
+    panel.BackgroundColor3 = Color3.fromRGB(19, 20, 24)
+    panel.BackgroundTransparency = 0.08
+    panel.BorderSizePixel = 0
+    panel.Active = true
+    panel.Parent = screenGui
+    state.overlay.panel = panel
+    makeCorner(panel, UDim.new(0, 12))
+    makeStroke(panel, Color3.fromRGB(92, 96, 108), 0.42, 1)
+
+    local header = Instance.new("Frame")
+    header.Name = "Header"
+    header.Size = UDim2.new(1, 0, 0, 22)
+    header.BackgroundTransparency = 1
+    header.Active = true
+    header.Parent = panel
+    state.overlay.header = header
+
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.Position = UDim2.fromOffset(9, 0)
+    title.Size = UDim2.new(1, -58, 1, 0)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamSemibold
+    title.Text = "controller"
+    title.TextColor3 = Color3.fromRGB(184, 190, 204)
+    title.TextSize = 10
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = header
+
+    local collapseButton = Instance.new("TextButton")
+    collapseButton.Name = "Collapse"
+    collapseButton.AnchorPoint = Vector2.new(1, 0.5)
+    collapseButton.Position = UDim2.new(1, -28, 0.5, 0)
+    collapseButton.Size = UDim2.fromOffset(18, 18)
+    collapseButton.BackgroundTransparency = 1
+    collapseButton.Font = Enum.Font.GothamBold
+    collapseButton.Text = "−"
+    collapseButton.TextColor3 = Color3.fromRGB(190, 196, 208)
+    collapseButton.TextSize = 13
+    collapseButton.Parent = header
+
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "Close"
+    closeButton.AnchorPoint = Vector2.new(1, 0.5)
+    closeButton.Position = UDim2.new(1, -8, 0.5, 0)
+    closeButton.Size = UDim2.fromOffset(18, 18)
+    closeButton.BackgroundTransparency = 1
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.Text = "×"
+    closeButton.TextColor3 = Color3.fromRGB(220, 150, 150)
+    closeButton.TextSize = 13
+    closeButton.Parent = header
+
+    local body = Instance.new("Frame")
+    body.Name = "Body"
+    body.Position = UDim2.fromOffset(8, 24)
+    body.Size = UDim2.new(1, -16, 1, -32)
+    body.BackgroundTransparency = 1
+    body.Parent = panel
+    state.overlay.body = body
+
+    local baseColor = Color3.fromRGB(46, 48, 56)
+    local controlColor = Color3.fromRGB(66, 69, 78)
+    local stickColor = Color3.fromRGB(57, 59, 68)
+
+    local controllerBody = Instance.new("Frame")
+    controllerBody.Name = "ControllerBody"
+    controllerBody.Position = UDim2.fromOffset(0, 10)
+    controllerBody.Size = UDim2.fromOffset(216, 92)
+    controllerBody.BackgroundColor3 = baseColor
+    controllerBody.BackgroundTransparency = 0.02
+    controllerBody.BorderSizePixel = 0
+    controllerBody.Parent = body
+    makeCorner(controllerBody, UDim.new(0, 28))
+
+    local centerPad = Instance.new("Frame")
+    centerPad.Name = "CenterPad"
+    centerPad.Position = UDim2.fromOffset(78, 10)
+    centerPad.Size = UDim2.fromOffset(60, 28)
+    centerPad.BackgroundColor3 = Color3.fromRGB(55, 58, 66)
+    centerPad.BorderSizePixel = 0
+    centerPad.Parent = controllerBody
+    makeCorner(centerPad, UDim.new(0, 8))
+
+    local function makeTextButton(name, text, pos, size, parent, round)
+        local button = Instance.new("TextLabel")
+        button.Name = name
+        button.Position = pos
+        button.Size = size
+        button.BackgroundColor3 = controlColor
+        button.BorderSizePixel = 0
+        button.Font = Enum.Font.GothamSemibold
+        button.Text = text
+        button.TextColor3 = Color3.fromRGB(190, 196, 208)
+        button.TextSize = 10
+        button.Parent = parent
+        makeCorner(button, round and UDim.new(1, 0) or UDim.new(0, 6))
+        return button
+    end
+
+    local l1 = makeTextButton("L1", "L1", UDim2.fromOffset(28, 0), UDim2.fromOffset(34, 16), body, false)
+    local r1 = makeTextButton("R1", "R1", UDim2.fromOffset(154, 0), UDim2.fromOffset(34, 16), body, false)
+    registerControl("L1", { l1 }, controlColor)
+    registerControl("R1", { r1 }, controlColor)
+
+    local dpadBase = Instance.new("Frame")
+    dpadBase.Name = "DPadBase"
+    dpadBase.Position = UDim2.fromOffset(25, 28)
+    dpadBase.Size = UDim2.fromOffset(48, 48)
+    dpadBase.BackgroundTransparency = 1
+    dpadBase.Parent = controllerBody
+    local dpadUp = makeTextButton("DPadUp", "", UDim2.fromOffset(18, 0), UDim2.fromOffset(12, 48), dpadBase, false)
+    local dpadSide = makeTextButton("DPadSide", "", UDim2.fromOffset(0, 18), UDim2.fromOffset(48, 12), dpadBase, false)
+    dpadUp.BackgroundColor3 = Color3.fromRGB(70, 73, 82)
+    dpadSide.BackgroundColor3 = Color3.fromRGB(70, 73, 82)
+
+    local faceBase = Instance.new("Frame")
+    faceBase.Name = "FaceButtons"
+    faceBase.Position = UDim2.fromOffset(150, 24)
+    faceBase.Size = UDim2.fromOffset(54, 54)
+    faceBase.BackgroundTransparency = 1
+    faceBase.Parent = controllerBody
+    local triangle = makeTextButton("Triangle", "△", UDim2.fromOffset(19, 0), UDim2.fromOffset(17, 17), faceBase, true)
+    local square = makeTextButton("Square", "□", UDim2.fromOffset(0, 19), UDim2.fromOffset(17, 17), faceBase, true)
+    local circle = makeTextButton("Circle", "○", UDim2.fromOffset(38, 19), UDim2.fromOffset(17, 17), faceBase, true)
+    local cross = makeTextButton("Cross", "X", UDim2.fromOffset(19, 38), UDim2.fromOffset(17, 17), faceBase, true)
+    registerControl("Triangle", { triangle }, controlColor)
+    registerControl("Square", { square }, controlColor)
+    registerControl("Circle", { circle }, controlColor)
+    registerControl("Cross", { cross }, controlColor)
+
+    local leftStick = makeTextButton("LeftStick", "", UDim2.fromOffset(78, 55), UDim2.fromOffset(34, 34), controllerBody, true)
+    local leftStickDot = makeTextButton("LeftStickDot", "L3", UDim2.fromOffset(86, 63), UDim2.fromOffset(18, 18), controllerBody, true)
+    local rightStick = makeTextButton("RightStick", "", UDim2.fromOffset(120, 55), UDim2.fromOffset(34, 34), controllerBody, true)
+    local rightStickDot = makeTextButton("RightStickDot", "R3", UDim2.fromOffset(128, 63), UDim2.fromOffset(18, 18), controllerBody, true)
+    leftStick.BackgroundColor3 = stickColor
+    leftStickDot.BackgroundColor3 = Color3.fromRGB(76, 79, 90)
+    rightStick.BackgroundColor3 = stickColor
+    rightStickDot.BackgroundColor3 = Color3.fromRGB(76, 79, 90)
+    registerControl("LeftStick", { leftStick }, stickColor)
+    registerControl("RightStick", { rightStick }, stickColor)
+    registerControl("L3", { leftStickDot }, Color3.fromRGB(76, 79, 90))
+    registerControl("R3", { rightStickDot }, Color3.fromRGB(76, 79, 90))
+
+    local function setCollapsed(collapsed)
+        state.overlay.collapsed = collapsed == true
+        body.Visible = not state.overlay.collapsed
+        panel.Size = state.overlay.collapsed and UDim2.fromOffset(232, 24) or UDim2.fromOffset(232, 138)
+        collapseButton.Text = state.overlay.collapsed and "+" or "−"
+    end
+
+    collapseButton.MouseButton1Click:Connect(function()
+        setCollapsed(not state.overlay.collapsed)
+    end)
+
+    closeButton.MouseButton1Click:Connect(function()
+        state.overlay.closed = true
+        screenGui:Destroy()
+    end)
+
+    local function beginDrag(input)
+        state.overlay.dragging = true
+        state.overlay.dragStart = input.Position
+        state.overlay.panelStart = panel.Position
+    end
+
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            beginDrag(input)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not state.overlay.dragging or not state.overlay.dragStart or not state.overlay.panelStart then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        local delta = input.Position - state.overlay.dragStart
+        panel.Position = UDim2.new(
+            state.overlay.panelStart.X.Scale,
+            state.overlay.panelStart.X.Offset + delta.X,
+            state.overlay.panelStart.Y.Scale,
+            state.overlay.panelStart.Y.Offset + delta.Y
+        )
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            state.overlay.dragging = false
+        end
+    end)
+
+    refreshOverlayStates()
+end
+
+buildControllerOverlay()
+
+local function setInteractHeld(isHeld)
+    if state.interactHeld == isHeld then
+        return
+    end
+
+    state.interactHeld = isHeld
+    refreshOverlayStates()
+    local sent = sendKeyEvent(CONFIG.InteractKeyboardKey, isHeld)
+    if sent then
+        log(isHeld and "Circle/B holding E" or "Circle/B released E")
+    elseif isHeld then
+        log("Circle/B pressed. ProximityPrompts use Circle/B; direct E hold injection unavailable in this environment.")
+    end
+end
+
+local function handleReload()
+    local sent = pressKeyboardKey(CONFIG.ReloadKeyboardKey)
+    if sent then
+        log("Square/X -> R")
+    else
+        log("Square/X pressed. Direct R injection unavailable in this environment; final support should bind reload logic to ButtonX.")
+    end
+end
+
+local function handleBackquoteAction()
+    local sent = pressKeyboardKey(CONFIG.BackquoteKeyboardKey)
+    if sent then
+        log("Triangle/Y -> `")
+    else
+        log("Triangle/Y pressed. Direct backquote injection unavailable in this environment; final support should bind the related action to ButtonY.")
+    end
+end
+
+local function handleJumpAction()
+    local sent = pressKeyboardKey(CONFIG.JumpKeyboardKey)
+    if sent then
+        log("Cross/A -> Space")
+    else
+        log("Cross/A pressed. Direct Space injection unavailable in this environment; Roblox default controller jump should still work.")
+    end
+end
+
+local function handleCAction()
+    local sent = pressKeyboardKey(CONFIG.CKeyboardKey)
+    if sent then
+        log("R3 -> C")
+    else
+        log("R3 pressed. Direct C injection unavailable in this environment; final support should bind the C action to ButtonR3.")
+    end
+end
+
+local function applyWalkSpeedSprint(active)
+    if not CONFIG.EnableWalkSpeedFallback then
+        return
+    end
+
+    local humanoid = getHumanoid(getCharacter())
+    if not humanoid then
+        return
+    end
+
+    if active then
+        if not state.preSprintWalkSpeed then
+            state.preSprintWalkSpeed = humanoid.WalkSpeed
+        end
+        local targetSpeed = math.max(state.preSprintWalkSpeed * CONFIG.SprintWalkSpeedMultiplier, CONFIG.MinimumSprintWalkSpeed)
+        humanoid.WalkSpeed = targetSpeed
+    else
+        if state.preSprintWalkSpeed then
+            humanoid.WalkSpeed = state.preSprintWalkSpeed
+        end
+        state.preSprintWalkSpeed = nil
+    end
+end
+
+local function setSprint(active)
+    if state.sprintActive == active then
+        return
+    end
+
+    state.sprintActive = active
+    sendKeyEvent(CONFIG.SprintKeyboardKey, active)
+    applyWalkSpeedSprint(active)
+    refreshOverlayStates()
+    log(active and "Sprint enabled" or "Sprint disabled")
+end
+
+local function toggleSprint()
+    setSprint(not state.sprintActive)
+end
+
+local function handleSprintInput(inputState)
+    if CONFIG.SprintIsToggle then
+        if inputState == Enum.UserInputState.Begin then
+            toggleSprint()
+        end
+    else
+        if inputState == Enum.UserInputState.Begin then
+            setSprint(true)
+        elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+            setSprint(false)
+        end
+    end
+end
+
+local function bindAction(name, callback, keyCode)
+    ContextActionService:UnbindAction(name)
+    ContextActionService:BindActionAtPriority(name, function(_, inputState, inputObject)
+        if inputState ~= Enum.UserInputState.Begin then
+            return Enum.ContextActionResult.Pass
+        end
+        callback(inputObject)
+        return Enum.ContextActionResult.Sink
+    end, false, CONFIG.ActionPriority, keyCode)
+end
+
+local function bindPassAction(name, callback, keyCode)
+    ContextActionService:UnbindAction(name)
+    ContextActionService:BindActionAtPriority(name, function(_, inputState, inputObject)
+        if inputState == Enum.UserInputState.Begin then
+            callback(inputObject)
+        end
+        return Enum.ContextActionResult.Pass
+    end, false, CONFIG.ActionPriority, keyCode)
+end
+
+local function bindHoldAction(name, beginCallback, endCallback, keyCode)
+    ContextActionService:UnbindAction(name)
+    ContextActionService:BindActionAtPriority(name, function(_, inputState)
+        if inputState == Enum.UserInputState.Begin then
+            beginCallback()
+            return Enum.ContextActionResult.Sink
+        elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+            endCallback()
+            return Enum.ContextActionResult.Sink
+        end
+        return Enum.ContextActionResult.Pass
+    end, false, CONFIG.ActionPriority, keyCode)
+end
+
+local function bindSprintAction()
+    local name = "ControllerBridge_Sprint"
+    ContextActionService:UnbindAction(name)
+    ContextActionService:BindActionAtPriority(name, function(_, inputState)
+        handleSprintInput(inputState)
+        return Enum.ContextActionResult.Sink
+    end, false, CONFIG.ActionPriority, CONFIG.SprintButton)
+end
+
+bindHoldAction("ControllerBridge_InteractHold", function()
+    setInteractHeld(true)
+end, function()
+    setInteractHeld(false)
+end, CONFIG.InteractButton)
+bindAction("ControllerBridge_Reload", handleReload, CONFIG.ReloadButton)
+bindAction("ControllerBridge_BackquoteAction", handleBackquoteAction, CONFIG.BackquoteButton)
+bindPassAction("ControllerBridge_JumpSpace", handleJumpAction, CONFIG.JumpButton)
+bindAction("ControllerBridge_CAction", handleCAction, CONFIG.CButton)
+bindAction("ControllerBridge_NextItem", function()
+    equipToolByDirection(1)
+end, CONFIG.NextItemButton)
+bindAction("ControllerBridge_PreviousItem", function()
+    equipToolByDirection(-1)
+end, CONFIG.PreviousItemButton)
+bindSprintAction()
+
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.Gamepad1 then
+        return
+    end
+    state.gamepadDown[input.KeyCode] = true
+    refreshOverlayStates()
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.Gamepad1 then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.Thumbstick1 then
+        state.leftStick = cleanStick(Vector2.new(input.Position.X, input.Position.Y), CONFIG.LeftStickDeadzone)
+        refreshOverlayStates()
+    elseif input.KeyCode == Enum.KeyCode.Thumbstick2 then
+        state.rightStick = cleanStick(Vector2.new(input.Position.X, input.Position.Y), CONFIG.RightStickDeadzone)
+        refreshOverlayStates()
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.Gamepad1 then
+        return
+    end
+
+    state.gamepadDown[input.KeyCode] = nil
+    if input.KeyCode == Enum.KeyCode.Thumbstick1 then
+        state.leftStick = Vector2.zero
+    elseif input.KeyCode == Enum.KeyCode.Thumbstick2 then
+        state.rightStick = Vector2.zero
+    elseif input.KeyCode == CONFIG.InteractButton then
+        setInteractHeld(false)
+    end
+    refreshOverlayStates()
+end)
+
+RunService:BindToRenderStep("ControllerBridge_CustomMovement", Enum.RenderPriority.Input.Value + 1, function()
+    if not CONFIG.EnableCustomLeftStickMovement then
+        return
+    end
+
+    local stick = state.leftStick
+    if stick.Magnitude <= 0 then
+        return
+    end
+
+    local camera = Workspace.CurrentCamera
+    local character = getCharacter()
+    local humanoid = getHumanoid(character)
+    if not camera or not humanoid then
+        return
+    end
+
+    local look = camera.CFrame.LookVector
+    local right = camera.CFrame.RightVector
+    local forward = Vector3.new(look.X, 0, look.Z)
+    local rightFlat = Vector3.new(right.X, 0, right.Z)
+    if forward.Magnitude <= 0.001 or rightFlat.Magnitude <= 0.001 then
+        return
+    end
+
+    local moveDirection = (rightFlat.Unit * stick.X) + (forward.Unit * stick.Y)
+    if moveDirection.Magnitude > 1 then
+        moveDirection = moveDirection.Unit
+    end
+    humanoid:Move(moveDirection, false)
+end)
+
+RunService:BindToRenderStep("ControllerBridge_CustomLook", Enum.RenderPriority.Camera.Value + 1, function(deltaTime)
+    if not CONFIG.EnableCustomRightStickLook then
+        return
+    end
+
+    local stick = state.rightStick
+    if stick.Magnitude <= 0 then
+        return
+    end
+
+    local camera = Workspace.CurrentCamera
+    if not camera then
+        return
+    end
+
+    local yawDelta = -stick.X * CONFIG.LookSensitivityX * deltaTime
+    local pitchDelta = -stick.Y * CONFIG.LookSensitivityY * deltaTime
+    local position = camera.CFrame.Position
+    local rotation = camera.CFrame - position
+    local nextRotation = CFrame.Angles(0, yawDelta, 0) * rotation * CFrame.Angles(pitchDelta, 0, 0)
+    camera.CFrame = CFrame.new(position) * nextRotation
+end)
+
+configureExistingPrompts()
+Workspace.DescendantAdded:Connect(function(descendant)
+    if descendant:IsA("ProximityPrompt") then
+        task.defer(configurePrompt, descendant)
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    state.preSprintWalkSpeed = nil
+    state.interactHeld = false
+    task.defer(function()
+        if state.sprintActive then
+            sendKeyEvent(CONFIG.SprintKeyboardKey, true)
+            applyWalkSpeedSprint(true)
+        elseif not CONFIG.SprintIsToggle then
+            setSprint(false)
+        end
+        refreshOverlayStates()
+    end)
+end)
+
+log("Loaded.")
+log("Circle/B -> hold interact/E, Square/X -> reload/R, Triangle/Y -> `, Cross/A -> Space, R1/RB -> next item, L1/LB -> previous item, L3 -> sprint toggle, R3 -> C. Overlay loaded.")
