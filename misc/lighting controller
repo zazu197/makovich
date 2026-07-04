@@ -1,0 +1,833 @@
+local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    warn("[LightingTuner] Must run on the client.")
+    return
+end
+
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 20)
+if not PlayerGui then
+    warn("[LightingTuner] PlayerGui was not available.")
+    return
+end
+
+local UI_NAME = "LocalLightingTuner_UI"
+local OLD = PlayerGui:FindFirstChild(UI_NAME)
+if OLD then
+    OLD:Destroy()
+end
+
+local COLORS = {
+    Background = Color3.fromRGB(27, 29, 35),
+    Surface = Color3.fromRGB(38, 41, 49),
+    Surface2 = Color3.fromRGB(48, 52, 62),
+    Stroke = Color3.fromRGB(98, 105, 122),
+    Text = Color3.fromRGB(238, 240, 245),
+    Muted = Color3.fromRGB(165, 171, 184),
+    Accent = Color3.fromRGB(142, 174, 230),
+    AccentDark = Color3.fromRGB(69, 97, 146),
+    Danger = Color3.fromRGB(197, 84, 84),
+}
+
+local state = {
+    collapsed = false,
+    dragging = false,
+    dragStart = nil,
+    frameStart = nil,
+    controls = {},
+    colorControls = {},
+}
+
+local function round(value, decimals)
+    decimals = decimals or 2
+    local mult = 10 ^ decimals
+    return math.floor((value * mult) + 0.5) / mult
+end
+
+local function clampNumber(value, minValue, maxValue)
+    value = tonumber(value) or 0
+    if minValue and value < minValue then
+        return minValue
+    end
+    if maxValue and value > maxValue then
+        return maxValue
+    end
+    return value
+end
+
+local function safeSet(instance, property, value)
+    if not instance then
+        return false
+    end
+    local ok, err = pcall(function()
+        instance[property] = value
+    end)
+    if not ok then
+        warn("[LightingTuner] Failed to set " .. tostring(instance.Name) .. "." .. tostring(property) .. ": " .. tostring(err))
+    end
+    return ok
+end
+
+local function safeGet(instance, property)
+    if not instance then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return instance[property]
+    end)
+    if ok then
+        return value
+    end
+    return nil
+end
+
+local function getOrCreate(className, preferredName)
+    local existing = Lighting:FindFirstChild(preferredName)
+    if existing and existing.ClassName == className then
+        return existing, false
+    end
+    for _, child in ipairs(Lighting:GetChildren()) do
+        if child.ClassName == className then
+            return child, false
+        end
+    end
+    local created = Instance.new(className)
+    created.Name = preferredName
+    created.Parent = Lighting
+    return created, true
+end
+
+local atmosphere, createdAtmosphere = getOrCreate("Atmosphere", "LocalLightingTuner_Atmosphere")
+local sunRays, createdSunRays = getOrCreate("SunRaysEffect", "LocalLightingTuner_SunRays")
+local bloom, createdBloom = getOrCreate("BloomEffect", "LocalLightingTuner_Bloom")
+local colorCorrection, createdColorCorrection = getOrCreate("ColorCorrectionEffect", "LocalLightingTuner_ColorCorrection")
+
+local original = {
+    Lighting = {},
+    Atmosphere = {},
+    SunRays = {},
+    Bloom = {},
+    ColorCorrection = {},
+    Created = {
+        Atmosphere = createdAtmosphere,
+        SunRays = createdSunRays,
+        Bloom = createdBloom,
+        ColorCorrection = createdColorCorrection,
+    },
+}
+
+local lightingProps = {
+    "Brightness", "ClockTime", "TimeOfDay", "Technology", "Ambient", "OutdoorAmbient", "ColorShift_Top", "ColorShift_Bottom",
+    "ExposureCompensation", "EnvironmentDiffuseScale", "EnvironmentSpecularScale", "FogColor", "FogStart", "FogEnd",
+    "GlobalShadows", "ShadowSoftness", "GeographicLatitude",
+}
+for _, prop in ipairs(lightingProps) do
+    original.Lighting[prop] = safeGet(Lighting, prop)
+end
+
+for _, prop in ipairs({"Density", "Offset", "Color", "Decay", "Glare", "Haze"}) do
+    original.Atmosphere[prop] = safeGet(atmosphere, prop)
+end
+for _, prop in ipairs({"Enabled", "Intensity", "Spread"}) do
+    original.SunRays[prop] = safeGet(sunRays, prop)
+end
+for _, prop in ipairs({"Enabled", "Intensity", "Size", "Threshold"}) do
+    original.Bloom[prop] = safeGet(bloom, prop)
+end
+for _, prop in ipairs({"Enabled", "Brightness", "Contrast", "Saturation", "TintColor"}) do
+    original.ColorCorrection[prop] = safeGet(colorCorrection, prop)
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = UI_NAME
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = PlayerGui
+
+local main = Instance.new("Frame")
+main.Name = "LightingTuner"
+main.Position = UDim2.fromOffset(18, 88)
+main.Size = UDim2.fromOffset(430, 560)
+main.BackgroundColor3 = COLORS.Background
+main.BorderSizePixel = 0
+main.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 12)
+mainCorner.Parent = main
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = COLORS.Stroke
+mainStroke.Transparency = 0.35
+mainStroke.Thickness = 1
+mainStroke.Parent = main
+
+local header = Instance.new("Frame")
+header.Name = "Header"
+header.Size = UDim2.new(1, 0, 0, 38)
+header.BackgroundColor3 = COLORS.Surface
+header.BorderSizePixel = 0
+header.Parent = main
+
+local headerCorner = Instance.new("UICorner")
+headerCorner.CornerRadius = UDim.new(0, 12)
+headerCorner.Parent = header
+
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Position = UDim2.fromOffset(12, 0)
+title.Size = UDim2.new(1, -110, 1, 0)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.Text = "Local Lighting Tuner"
+title.TextColor3 = COLORS.Text
+title.TextSize = 14
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
+
+local function makeHeaderButton(name, text, xOffset, color)
+    local button = Instance.new("TextButton")
+    button.Name = name
+    button.AnchorPoint = Vector2.new(1, 0.5)
+    button.Position = UDim2.new(1, xOffset, 0.5, 0)
+    button.Size = UDim2.fromOffset(28, 24)
+    button.BackgroundColor3 = color or COLORS.Surface2
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = false
+    button.Font = Enum.Font.GothamBold
+    button.Text = text
+    button.TextColor3 = COLORS.Text
+    button.TextSize = 13
+    button.Parent = header
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 7)
+    corner.Parent = button
+    return button
+end
+
+local collapseButton = makeHeaderButton("Collapse", "–", -44, COLORS.Surface2)
+local closeButton = makeHeaderButton("Close", "×", -12, COLORS.Danger)
+
+local body = Instance.new("Frame")
+body.Name = "Body"
+body.Position = UDim2.fromOffset(0, 38)
+body.Size = UDim2.new(1, 0, 1, -38)
+body.BackgroundTransparency = 1
+body.ClipsDescendants = true
+body.Parent = main
+
+local topBar = Instance.new("Frame")
+topBar.Name = "TopBar"
+topBar.Position = UDim2.fromOffset(10, 8)
+topBar.Size = UDim2.new(1, -20, 0, 34)
+topBar.BackgroundTransparency = 1
+topBar.Parent = body
+
+local resetButton = Instance.new("TextButton")
+resetButton.Name = "ResetButton"
+resetButton.Position = UDim2.fromOffset(0, 0)
+resetButton.Size = UDim2.fromOffset(128, 30)
+resetButton.BackgroundColor3 = COLORS.Surface2
+resetButton.BorderSizePixel = 0
+resetButton.AutoButtonColor = false
+resetButton.Font = Enum.Font.GothamBold
+resetButton.Text = "Reset captured"
+resetButton.TextColor3 = COLORS.Text
+resetButton.TextSize = 12
+resetButton.Parent = topBar
+
+local resetCorner = Instance.new("UICorner")
+resetCorner.CornerRadius = UDim.new(0, 8)
+resetCorner.Parent = resetButton
+
+local noteLabel = Instance.new("TextLabel")
+noteLabel.Position = UDim2.fromOffset(140, 0)
+noteLabel.Size = UDim2.new(1, -140, 30, 0)
+noteLabel.BackgroundTransparency = 1
+noteLabel.Font = Enum.Font.Gotham
+noteLabel.Text = "Client-only. Close hides UI; reset restores startup values."
+noteLabel.TextColor3 = COLORS.Muted
+noteLabel.TextSize = 10
+noteLabel.TextXAlignment = Enum.TextXAlignment.Left
+noteLabel.TextWrapped = true
+noteLabel.Parent = topBar
+
+local scroll = Instance.new("ScrollingFrame")
+scroll.Name = "SettingsScroll"
+scroll.Position = UDim2.fromOffset(10, 46)
+scroll.Size = UDim2.new(1, -20, 1, -56)
+scroll.BackgroundTransparency = 1
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 5
+scroll.CanvasSize = UDim2.fromOffset(0, 0)
+scroll.Parent = body
+
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 8)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = scroll
+
+local function updateCanvas()
+    scroll.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 12)
+end
+layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvas)
+
+do
+    local draggingHeader = false
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            draggingHeader = true
+            state.dragStart = input.Position
+            state.frameStart = main.Position
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            draggingHeader = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if draggingHeader and state.dragStart and state.frameStart and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - state.dragStart
+            main.Position = UDim2.new(
+                state.frameStart.X.Scale,
+                state.frameStart.X.Offset + delta.X,
+                state.frameStart.Y.Scale,
+                state.frameStart.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+local function createSection(name)
+    local section = Instance.new("Frame")
+    section.Name = name:gsub("%s+", "") .. "Section"
+    section.BackgroundColor3 = COLORS.Surface
+    section.BackgroundTransparency = 0.04
+    section.BorderSizePixel = 0
+    section.AutomaticSize = Enum.AutomaticSize.Y
+    section.Size = UDim2.new(1, 0, 0, 0)
+    section.Parent = scroll
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = section
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = COLORS.Stroke
+    stroke.Transparency = 0.62
+    stroke.Thickness = 1
+    stroke.Parent = section
+
+    local padding = Instance.new("UIPadding")
+    padding.PaddingTop = UDim.new(0, 10)
+    padding.PaddingBottom = UDim.new(0, 10)
+    padding.PaddingLeft = UDim.new(0, 10)
+    padding.PaddingRight = UDim.new(0, 10)
+    padding.Parent = section
+
+    local list = Instance.new("UIListLayout")
+    list.Padding = UDim.new(0, 7)
+    list.SortOrder = Enum.SortOrder.LayoutOrder
+    list.Parent = section
+
+    local label = Instance.new("TextLabel")
+    label.Name = "SectionTitle"
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(1, 0, 0, 20)
+    label.Font = Enum.Font.GothamBold
+    label.Text = name
+    label.TextColor3 = COLORS.Accent
+    label.TextSize = 13
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = section
+
+    return section
+end
+
+local function createSlider(section, labelText, minValue, maxValue, defaultValue, decimals, callback)
+    decimals = decimals or 2
+    local row = Instance.new("Frame")
+    row.Name = labelText:gsub("%W", "") .. "Row"
+    row.Size = UDim2.new(1, 0, 0, 44)
+    row.BackgroundTransparency = 1
+    row.Parent = section
+
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.fromOffset(0, 0)
+    label.Size = UDim2.new(0, 170, 0, 18)
+    label.Font = Enum.Font.Gotham
+    label.Text = labelText
+    label.TextColor3 = COLORS.Text
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local box = Instance.new("TextBox")
+    box.AnchorPoint = Vector2.new(1, 0)
+    box.Position = UDim2.new(1, 0, 0, 0)
+    box.Size = UDim2.fromOffset(88, 22)
+    box.BackgroundColor3 = COLORS.Surface2
+    box.BorderSizePixel = 0
+    box.ClearTextOnFocus = false
+    box.Font = Enum.Font.Gotham
+    box.TextColor3 = COLORS.Text
+    box.PlaceholderColor3 = COLORS.Muted
+    box.TextSize = 11
+    box.Text = tostring(round(defaultValue, decimals))
+    box.Parent = row
+    local boxCorner = Instance.new("UICorner")
+    boxCorner.CornerRadius = UDim.new(0, 6)
+    boxCorner.Parent = box
+
+    local track = Instance.new("Frame")
+    track.Position = UDim2.fromOffset(0, 28)
+    track.Size = UDim2.new(1, 0, 0, 8)
+    track.BackgroundColor3 = Color3.fromRGB(62, 67, 80)
+    track.BorderSizePixel = 0
+    track.Active = true
+    track.Parent = row
+    local trackCorner = Instance.new("UICorner")
+    trackCorner.CornerRadius = UDim.new(1, 0)
+    trackCorner.Parent = track
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.fromScale(0, 1)
+    fill.BackgroundColor3 = COLORS.Accent
+    fill.BorderSizePixel = 0
+    fill.Parent = track
+    local fillCorner = Instance.new("UICorner")
+    fillCorner.CornerRadius = UDim.new(1, 0)
+    fillCorner.Parent = fill
+
+    local knob = Instance.new("Frame")
+    knob.AnchorPoint = Vector2.new(0.5, 0.5)
+    knob.Size = UDim2.fromOffset(14, 14)
+    knob.BackgroundColor3 = Color3.fromRGB(244, 246, 250)
+    knob.BorderSizePixel = 0
+    knob.Parent = track
+    local knobCorner = Instance.new("UICorner")
+    knobCorner.CornerRadius = UDim.new(1, 0)
+    knobCorner.Parent = knob
+
+    local dragging = false
+    local current = defaultValue
+
+    local function setVisual(value)
+        current = clampNumber(value, minValue, maxValue)
+        local alpha = (current - minValue) / math.max(maxValue - minValue, 0.0001)
+        alpha = math.clamp(alpha, 0, 1)
+        fill.Size = UDim2.fromScale(alpha, 1)
+        knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+        if not box:IsFocused() then
+            box.Text = tostring(round(current, decimals))
+        end
+    end
+
+    local function apply(value)
+        local numeric = clampNumber(value, minValue, maxValue)
+        setVisual(numeric)
+        callback(numeric)
+    end
+
+    local function applyFromX(x)
+        local left = track.AbsolutePosition.X
+        local width = math.max(track.AbsoluteSize.X, 1)
+        local alpha = math.clamp((x - left) / width, 0, 1)
+        apply(minValue + ((maxValue - minValue) * alpha))
+    end
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            applyFromX(input.Position.X)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            applyFromX(input.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    box.FocusLost:Connect(function()
+        apply(tonumber(box.Text) or current)
+    end)
+
+    setVisual(defaultValue)
+    table.insert(state.controls, {
+        Set = function(value)
+            setVisual(value)
+        end,
+    })
+    return {
+        Set = setVisual,
+        Apply = apply,
+    }
+end
+
+local function createToggle(section, labelText, defaultValue, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 28)
+    row.BackgroundTransparency = 1
+    row.Parent = section
+
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.fromOffset(0, 0)
+    label.Size = UDim2.new(1, -92, 1, 0)
+    label.Font = Enum.Font.Gotham
+    label.Text = labelText
+    label.TextColor3 = COLORS.Text
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local button = Instance.new("TextButton")
+    button.AnchorPoint = Vector2.new(1, 0.5)
+    button.Position = UDim2.new(1, 0, 0.5, 0)
+    button.Size = UDim2.fromOffset(78, 24)
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = false
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 11
+    button.Parent = row
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 7)
+    corner.Parent = button
+
+    local value = defaultValue == true
+    local function refresh()
+        button.Text = value and "ON" or "OFF"
+        button.BackgroundColor3 = value and COLORS.AccentDark or COLORS.Surface2
+        button.TextColor3 = COLORS.Text
+    end
+    button.MouseButton1Click:Connect(function()
+        value = not value
+        refresh()
+        callback(value)
+    end)
+    refresh()
+    return {
+        Set = function(nextValue)
+            value = nextValue == true
+            refresh()
+        end,
+    }
+end
+
+local function createOptionPicker(section, labelText, enumItems, defaultValue, callback)
+    local rowHeight = 62
+    local row = Instance.new("Frame")
+    row.Name = labelText:gsub("%W", "") .. "PickerRow"
+    row.Size = UDim2.new(1, 0, 0, rowHeight)
+    row.BackgroundTransparency = 1
+    row.Parent = section
+
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.fromOffset(0, 0)
+    label.Size = UDim2.new(1, 0, 0, 18)
+    label.Font = Enum.Font.Gotham
+    label.Text = labelText
+    label.TextColor3 = COLORS.Text
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local buttons = {}
+    local selectedName = defaultValue and defaultValue.Name or ""
+    local holder = Instance.new("Frame")
+    holder.Name = "Options"
+    holder.Position = UDim2.fromOffset(0, 24)
+    holder.Size = UDim2.new(1, 0, 0, 30)
+    holder.BackgroundTransparency = 1
+    holder.Parent = row
+
+    local optionCount = math.max(#enumItems, 1)
+    local gap = 6
+    local function refresh()
+        for _, buttonData in ipairs(buttons) do
+            local isSelected = buttonData.Name == selectedName
+            buttonData.Button.BackgroundColor3 = isSelected and COLORS.AccentDark or COLORS.Surface2
+            buttonData.Button.TextColor3 = COLORS.Text
+        end
+    end
+
+    for index, item in ipairs(enumItems) do
+        local button = Instance.new("TextButton")
+        button.Name = item.Name .. "Option"
+        button.Position = UDim2.new((index - 1) / optionCount, index == 1 and 0 or gap * 0.5, 0, 0)
+        button.Size = UDim2.new(1 / optionCount, -gap, 1, 0)
+        button.BackgroundColor3 = COLORS.Surface2
+        button.BorderSizePixel = 0
+        button.AutoButtonColor = false
+        button.Font = Enum.Font.GothamBold
+        button.Text = item.Name
+        button.TextColor3 = COLORS.Text
+        button.TextSize = 10
+        button.Parent = holder
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 7)
+        corner.Parent = button
+
+        table.insert(buttons, { Button = button, Name = item.Name, Value = item })
+        button.MouseButton1Click:Connect(function()
+            selectedName = item.Name
+            refresh()
+            callback(item)
+        end)
+    end
+
+    refresh()
+    return {
+        Set = function(nextValue)
+            selectedName = nextValue and nextValue.Name or ""
+            refresh()
+        end,
+    }
+end
+
+local function createTextInput(section, labelText, defaultText, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 32)
+    row.BackgroundTransparency = 1
+    row.Parent = section
+
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.fromOffset(0, 0)
+    label.Size = UDim2.new(0, 145, 1, 0)
+    label.Font = Enum.Font.Gotham
+    label.Text = labelText
+    label.TextColor3 = COLORS.Text
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local box = Instance.new("TextBox")
+    box.Position = UDim2.fromOffset(150, 3)
+    box.Size = UDim2.new(1, -150, 0, 26)
+    box.BackgroundColor3 = COLORS.Surface2
+    box.BorderSizePixel = 0
+    box.ClearTextOnFocus = false
+    box.Font = Enum.Font.Gotham
+    box.TextColor3 = COLORS.Text
+    box.PlaceholderColor3 = COLORS.Muted
+    box.TextSize = 11
+    box.Text = tostring(defaultText or "")
+    box.Parent = row
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = box
+    box.FocusLost:Connect(function()
+        callback(box.Text)
+    end)
+    return {
+        Set = function(text)
+            box.Text = tostring(text or "")
+        end,
+    }
+end
+
+local function colorToRGBText(color)
+    color = color or Color3.new(0, 0, 0)
+    return math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5)
+end
+
+local function createColorControl(section, labelText, defaultColor, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 36)
+    row.BackgroundTransparency = 1
+    row.Parent = section
+
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.fromOffset(0, 0)
+    label.Size = UDim2.new(0, 122, 1, 0)
+    label.Font = Enum.Font.Gotham
+    label.Text = labelText
+    label.TextColor3 = COLORS.Text
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local swatch = Instance.new("Frame")
+    swatch.Position = UDim2.fromOffset(124, 6)
+    swatch.Size = UDim2.fromOffset(24, 24)
+    swatch.BackgroundColor3 = defaultColor or Color3.new(0, 0, 0)
+    swatch.BorderSizePixel = 0
+    swatch.Parent = row
+    local swatchCorner = Instance.new("UICorner")
+    swatchCorner.CornerRadius = UDim.new(0, 6)
+    swatchCorner.Parent = swatch
+
+    local boxes = {}
+    local labels = {"R", "G", "B"}
+    for index, channel in ipairs(labels) do
+        local box = Instance.new("TextBox")
+        box.Name = channel
+        box.Position = UDim2.fromOffset(156 + ((index - 1) * 54), 5)
+        box.Size = UDim2.fromOffset(48, 26)
+        box.BackgroundColor3 = COLORS.Surface2
+        box.BorderSizePixel = 0
+        box.ClearTextOnFocus = false
+        box.Font = Enum.Font.Gotham
+        box.TextColor3 = COLORS.Text
+        box.PlaceholderText = channel
+        box.PlaceholderColor3 = COLORS.Muted
+        box.TextSize = 11
+        box.Parent = row
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = box
+        boxes[channel] = box
+    end
+
+    local function setVisual(color)
+        color = color or Color3.new(0, 0, 0)
+        local r, g, b = colorToRGBText(color)
+        swatch.BackgroundColor3 = color
+        if not boxes.R:IsFocused() then boxes.R.Text = tostring(r) end
+        if not boxes.G:IsFocused() then boxes.G.Text = tostring(g) end
+        if not boxes.B:IsFocused() then boxes.B.Text = tostring(b) end
+    end
+
+    local function applyFromBoxes()
+        local r = clampNumber(boxes.R.Text, 0, 255)
+        local g = clampNumber(boxes.G.Text, 0, 255)
+        local b = clampNumber(boxes.B.Text, 0, 255)
+        local color = Color3.fromRGB(math.floor(r + 0.5), math.floor(g + 0.5), math.floor(b + 0.5))
+        setVisual(color)
+        callback(color)
+    end
+
+    for _, box in pairs(boxes) do
+        box.FocusLost:Connect(applyFromBoxes)
+    end
+
+    setVisual(defaultColor)
+    table.insert(state.colorControls, { Set = setVisual })
+    return { Set = setVisual }
+end
+
+local basic = createSection("Basic Lighting")
+createSlider(basic, "Brightness", 0, 10, safeGet(Lighting, "Brightness") or 2, 2, function(v) safeSet(Lighting, "Brightness", v) end)
+createSlider(basic, "ClockTime", 0, 24, safeGet(Lighting, "ClockTime") or 14, 2, function(v) safeSet(Lighting, "ClockTime", v) end)
+createOptionPicker(basic, "Technology", Enum.Technology:GetEnumItems(), safeGet(Lighting, "Technology"), function(v)
+    safeSet(Lighting, "Technology", v)
+end)
+createTextInput(basic, "TimeOfDay", safeGet(Lighting, "TimeOfDay") or "14:00:00", function(text)
+    if string.match(text or "", "^%d?%d:%d%d:%d%d$") then
+        safeSet(Lighting, "TimeOfDay", text)
+    end
+end)
+createSlider(basic, "ExposureCompensation", -5, 5, safeGet(Lighting, "ExposureCompensation") or 0, 2, function(v) safeSet(Lighting, "ExposureCompensation", v) end)
+createSlider(basic, "EnvironmentDiffuseScale", 0, 1, safeGet(Lighting, "EnvironmentDiffuseScale") or 0, 2, function(v) safeSet(Lighting, "EnvironmentDiffuseScale", v) end)
+createSlider(basic, "EnvironmentSpecularScale", 0, 1, safeGet(Lighting, "EnvironmentSpecularScale") or 0, 2, function(v) safeSet(Lighting, "EnvironmentSpecularScale", v) end)
+createToggle(basic, "GlobalShadows", safeGet(Lighting, "GlobalShadows") == true, function(v) safeSet(Lighting, "GlobalShadows", v) end)
+createSlider(basic, "ShadowSoftness", 0, 1, safeGet(Lighting, "ShadowSoftness") or 0.2, 2, function(v) safeSet(Lighting, "ShadowSoftness", v) end)
+createSlider(basic, "GeographicLatitude", -90, 90, safeGet(Lighting, "GeographicLatitude") or 0, 1, function(v) safeSet(Lighting, "GeographicLatitude", v) end)
+
+local colorsSection = createSection("Lighting Colors + Fog")
+createColorControl(colorsSection, "Ambient", safeGet(Lighting, "Ambient") or Color3.new(0, 0, 0), function(c) safeSet(Lighting, "Ambient", c) end)
+createColorControl(colorsSection, "OutdoorAmbient", safeGet(Lighting, "OutdoorAmbient") or Color3.new(0, 0, 0), function(c) safeSet(Lighting, "OutdoorAmbient", c) end)
+createColorControl(colorsSection, "ColorShift_Top", safeGet(Lighting, "ColorShift_Top") or Color3.new(0, 0, 0), function(c) safeSet(Lighting, "ColorShift_Top", c) end)
+createColorControl(colorsSection, "ColorShift_Bottom", safeGet(Lighting, "ColorShift_Bottom") or Color3.new(0, 0, 0), function(c) safeSet(Lighting, "ColorShift_Bottom", c) end)
+createColorControl(colorsSection, "FogColor", safeGet(Lighting, "FogColor") or Color3.new(1, 1, 1), function(c) safeSet(Lighting, "FogColor", c) end)
+createSlider(colorsSection, "FogStart", 0, 5000, safeGet(Lighting, "FogStart") or 0, 0, function(v) safeSet(Lighting, "FogStart", v) end)
+createSlider(colorsSection, "FogEnd", 0, 20000, safeGet(Lighting, "FogEnd") or 100000, 0, function(v) safeSet(Lighting, "FogEnd", v) end)
+
+local atmosphereSection = createSection("Atmosphere")
+createSlider(atmosphereSection, "Density", 0, 1, safeGet(atmosphere, "Density") or 0.3, 3, function(v) safeSet(atmosphere, "Density", v) end)
+createSlider(atmosphereSection, "Offset", -1, 1, safeGet(atmosphere, "Offset") or 0, 3, function(v) safeSet(atmosphere, "Offset", v) end)
+createSlider(atmosphereSection, "Glare", 0, 10, safeGet(atmosphere, "Glare") or 0, 2, function(v) safeSet(atmosphere, "Glare", v) end)
+createSlider(atmosphereSection, "Haze", 0, 10, safeGet(atmosphere, "Haze") or 0, 2, function(v) safeSet(atmosphere, "Haze", v) end)
+createColorControl(atmosphereSection, "Color", safeGet(atmosphere, "Color") or Color3.fromRGB(199, 199, 199), function(c) safeSet(atmosphere, "Color", c) end)
+createColorControl(atmosphereSection, "Decay", safeGet(atmosphere, "Decay") or Color3.fromRGB(106, 112, 125), function(c) safeSet(atmosphere, "Decay", c) end)
+
+local sunSection = createSection("Sun Rays")
+createToggle(sunSection, "Enabled", safeGet(sunRays, "Enabled") == true, function(v) safeSet(sunRays, "Enabled", v) end)
+createSlider(sunSection, "Intensity", 0, 1, safeGet(sunRays, "Intensity") or 0.1, 3, function(v) safeSet(sunRays, "Intensity", v) end)
+createSlider(sunSection, "Spread", 0, 1, safeGet(sunRays, "Spread") or 1, 3, function(v) safeSet(sunRays, "Spread", v) end)
+
+local bloomSection = createSection("Bloom")
+createToggle(bloomSection, "Enabled", safeGet(bloom, "Enabled") == true, function(v) safeSet(bloom, "Enabled", v) end)
+createSlider(bloomSection, "Intensity", 0, 10, safeGet(bloom, "Intensity") or 1, 2, function(v) safeSet(bloom, "Intensity", v) end)
+createSlider(bloomSection, "Size", 0, 100, safeGet(bloom, "Size") or 24, 1, function(v) safeSet(bloom, "Size", v) end)
+createSlider(bloomSection, "Threshold", 0, 10, safeGet(bloom, "Threshold") or 2, 2, function(v) safeSet(bloom, "Threshold", v) end)
+
+local ccSection = createSection("Color Correction")
+createToggle(ccSection, "Enabled", safeGet(colorCorrection, "Enabled") == true, function(v) safeSet(colorCorrection, "Enabled", v) end)
+createSlider(ccSection, "Brightness", -1, 1, safeGet(colorCorrection, "Brightness") or 0, 3, function(v) safeSet(colorCorrection, "Brightness", v) end)
+createSlider(ccSection, "Contrast", -1, 1, safeGet(colorCorrection, "Contrast") or 0, 3, function(v) safeSet(colorCorrection, "Contrast", v) end)
+createSlider(ccSection, "Saturation", -1, 1, safeGet(colorCorrection, "Saturation") or 0, 3, function(v) safeSet(colorCorrection, "Saturation", v) end)
+createColorControl(ccSection, "TintColor", safeGet(colorCorrection, "TintColor") or Color3.new(1, 1, 1), function(c) safeSet(colorCorrection, "TintColor", c) end)
+
+local function restoreTable(instance, props)
+    if not instance then
+        return
+    end
+    for prop, value in pairs(props) do
+        if value ~= nil then
+            safeSet(instance, prop, value)
+        end
+    end
+end
+
+local function restoreOriginal()
+    restoreTable(Lighting, original.Lighting)
+    if original.Created.Atmosphere and atmosphere and atmosphere.Parent then
+        atmosphere:Destroy()
+    else
+        restoreTable(atmosphere, original.Atmosphere)
+    end
+    if original.Created.SunRays and sunRays and sunRays.Parent then
+        sunRays:Destroy()
+    else
+        restoreTable(sunRays, original.SunRays)
+    end
+    if original.Created.Bloom and bloom and bloom.Parent then
+        bloom:Destroy()
+    else
+        restoreTable(bloom, original.Bloom)
+    end
+    if original.Created.ColorCorrection and colorCorrection and colorCorrection.Parent then
+        colorCorrection:Destroy()
+    else
+        restoreTable(colorCorrection, original.ColorCorrection)
+    end
+    resetButton.Text = "Restored"
+    task.delay(1.2, function()
+        if resetButton and resetButton.Parent then
+            resetButton.Text = "Reset captured"
+        end
+    end)
+end
+
+resetButton.MouseButton1Click:Connect(restoreOriginal)
+
+collapseButton.MouseButton1Click:Connect(function()
+    state.collapsed = not state.collapsed
+    body.Visible = not state.collapsed
+    collapseButton.Text = state.collapsed and "+" or "–"
+    local targetSize = state.collapsed and UDim2.fromOffset(430, 38) or UDim2.fromOffset(430, 560)
+    TweenService:Create(main, TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Size = targetSize }):Play()
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
+
+updateCanvas()
+print("[LightingTuner] Loaded. Changes are local to this client.")
