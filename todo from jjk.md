@@ -9,7 +9,7 @@ do later
 - [ ] make mutant see radio
 - [ ] allow mutants to be able to pick up things
 - [ ] size changer
-- [ ] show who sitting in 001 seat yeah
+
       
 done 
 - [x] intel changer and agility changer
@@ -24,3 +24,4 @@ done
 
 death
 - [-] make 001 controler accessible from anywhere, not sitting on chair // IMPOSSIBLE I DONT KNOW HOW
+- [-] show who sitting in 001 seat yeah
