@@ -1,10 +1,9 @@
 priority
-- [-] make 001 controler accessible from anywhere, not sitting on chair // IMPOSSIBLE I DONT KNOW HOW
-- [ ] allow for 002 controller to be on able to be controlled through integer inputs, to make the heat bar faster to fill up, insta fill
-- [ ] allow to equip multiple tools at once
-- [ ] custom gun skins
+- [ ] custom gun skins (aka fix my script)
 
 do later
+- [ ] allow for 002 controller to be on able to be controlled through integer inputs, to make the heat bar faster to fill up, insta fill
+- [ ] allow to equip multiple tools at once
 - [ ] lighting settings 
 - [ ] waypoint system
 - [ ] make mutant see radio
@@ -22,3 +21,6 @@ done
 - [x] make mines visible through highlight (outline)
 - [x] make overhead ui smaller-
 - [x] ---> TEAM CHANGER <---
+
+death
+- [-] make 001 controler accessible from anywhere, not sitting on chair // IMPOSSIBLE I DONT KNOW HOW
