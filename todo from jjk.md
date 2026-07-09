@@ -1,5 +1,5 @@
 priority
-- [ ] custom gun skins (aka fix my script)
+- [ ] show if patients have contraband
 
 do later
 - [ ] allow for 002 controller to be on able to be controlled through integer inputs, to make the heat bar faster to fill up, insta fill
@@ -12,6 +12,7 @@ do later
 
       
 done 
+- [x] custom gun skins (aka fix my script)
 - [x] intel changer and agility changer
 - [X] make mutants be able to crouch
 - [x] mesh chams
