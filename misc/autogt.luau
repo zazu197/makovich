@@ -47,10 +47,25 @@ local CASSETTE_EQUIP_DELAY = 0.2
 local CASSETTE_USE_CONFIRM_TIMEOUT = 2
 local GLOBAL_TRAITOR_INITIAL_DELAY = 1.5
 local GLOBAL_TRAITOR_POLL_TIMEOUT = 3
+local MELEE_SCAN_TIMEOUT = 8
+local MELEE_PICKUP_CONFIRM_TIMEOUT = 2
+local MELEE_EQUIP_SYNC_DELAY = 0.5
+local MELEE_EQUIP_DELAY = 0.35
+local MELEE_EQUIP_RETRY_DELAY = 0.25
+local MELEE_EQUIP_ATTEMPTS = 3
 local PICKUP_CONFIRM_TIMEOUT = 2
 local MAX_ATTEMPTS_PER_CASSETTE = 2
+local MAX_ATTEMPTS_PER_MELEE = 2
 
 local attempts = {}
+local meleeAttempts = {}
+
+local MELEE_NAMES = {
+    Baton = true,
+    Hammer = true,
+    ["Metal Pipe"] = true,
+    Screwdriver = true,
+}
 
 local function getRootPart()
     local character = player.Character or player.CharacterAdded:Wait()
@@ -175,8 +190,8 @@ local function findOwnedTool(predicate)
     return nil
 end
 
-local function waitForOwnedTool(predicate)
-    local deadline = os.clock() + INVENTORY_SYNC_TIMEOUT
+local function waitForOwnedTool(predicate, timeout)
+    local deadline = os.clock() + (timeout or INVENTORY_SYNC_TIMEOUT)
 
     repeat
         local tool = findOwnedTool(predicate)
@@ -200,6 +215,153 @@ local function isInInventory(tool)
     return tool.Parent == character or tool.Parent == backpack
 end
 
+local function isMeleeTool(tool)
+    return MELEE_NAMES[tool.Name] == true
+end
+
+local function isMeleeSpawn(instance)
+    return instance:IsA("Model")
+        and instance.Name == "ItemSpawn"
+        and MELEE_NAMES[instance:GetAttribute("Item")] == true
+end
+
+local function findMeleeSpawns(origin)
+    local meleeSpawns = {}
+
+    for _, spawn in sectors:QueryDescendants("Model#ItemSpawn[$Item]") do
+        if isMeleeSpawn(spawn)
+            and (meleeAttempts[spawn] or 0) < MAX_ATTEMPTS_PER_MELEE
+        then
+            local spawnPart = getSpawnPart(spawn)
+            if spawnPart then
+                meleeSpawns[#meleeSpawns + 1] = {
+                    Spawn = spawn,
+                    Part = spawnPart,
+                    Distance = (spawnPart.Position - origin).Magnitude,
+                }
+            end
+        end
+    end
+
+    table.sort(meleeSpawns, function(a, b)
+        return a.Distance < b.Distance
+    end)
+
+    return meleeSpawns
+end
+
+local function grabMelee()
+    local ownedMelee = findOwnedTool(isMeleeTool)
+    if ownedMelee then
+        print(("Melee already owned: %s"):format(ownedMelee.Name))
+        return ownedMelee
+    end
+
+    local scanDeadline = os.clock() + MELEE_SCAN_TIMEOUT
+
+    repeat
+        local rootPart = getRootPart()
+        local meleeSpawns = findMeleeSpawns(rootPart.Position)
+
+        for _, candidate in meleeSpawns do
+            if os.clock() >= scanDeadline then
+                break
+            end
+
+            local spawn = candidate.Spawn
+            if spawn.Parent and isMeleeSpawn(spawn) then
+                local spawnPart = getSpawnPart(spawn)
+                if spawnPart then
+                    local itemName = tostring(spawn:GetAttribute("Item"))
+                    meleeAttempts[spawn] = (meleeAttempts[spawn] or 0) + 1
+                    rootPart = getRootPart()
+                    rootPart.AssemblyLinearVelocity = Vector3.zero
+                    rootPart.AssemblyAngularVelocity = Vector3.zero
+                    rootPart.CFrame = spawnPart.CFrame * TELEPORT_OFFSET
+                    task.wait(TELEPORT_DELAY)
+
+                    local ok, result = pcall(function()
+                        return interactionFunction:InvokeServer(
+                            "ServerInteraction",
+                            spawn,
+                            Enum.NormalId.Back,
+                            nil,
+                            nil
+                        )
+                    end)
+
+                    if ok then
+                        local meleeTool = waitForOwnedTool(
+                            isMeleeTool,
+                            MELEE_PICKUP_CONFIRM_TIMEOUT
+                        )
+
+                        if meleeTool then
+                            print(("Melee picked up: %s"):format(meleeTool.Name))
+                            return meleeTool
+                        end
+
+                        warn(("Melee pickup was not confirmed: %s"):format(itemName))
+                    else
+                        warn(("Melee pickup failed for %s: %s"):format(
+                            itemName,
+                            tostring(result)
+                        ))
+                    end
+
+                    task.wait(INTERACTION_DELAY)
+                end
+            end
+        end
+
+        task.wait(0.2)
+    until os.clock() >= scanDeadline
+
+    return nil
+end
+
+local function equipMelee(meleeTool)
+    task.wait(MELEE_EQUIP_SYNC_DELAY)
+
+    for _ = 1, MELEE_EQUIP_ATTEMPTS do
+        if not meleeTool.Parent then
+            return false
+        end
+
+        local character = player.Character or player.CharacterAdded:Wait()
+        local humanoid = character:WaitForChild("Humanoid")
+        local backpack = player:WaitForChild("Backpack")
+
+        if meleeTool.Parent == character then
+            return true
+        end
+
+        humanoid:UnequipTools()
+        task.wait(0.1)
+
+        if meleeTool.Parent ~= backpack then
+            meleeTool.Parent = backpack
+            task.wait(0.1)
+        end
+
+        humanoid:EquipTool(meleeTool)
+        task.wait(MELEE_EQUIP_DELAY)
+
+        if meleeTool.Parent == character then
+            return true
+        end
+
+        meleeTool.Parent = character
+        task.wait(MELEE_EQUIP_RETRY_DELAY)
+
+        if meleeTool.Parent == character then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function waitForGlobalTraitorAndTeleport()
     task.wait(GLOBAL_TRAITOR_INITIAL_DELAY)
     local deadline = os.clock() + GLOBAL_TRAITOR_POLL_TIMEOUT
@@ -207,8 +369,22 @@ local function waitForGlobalTraitorAndTeleport()
     repeat
         local character = player.Character
         if character and CollectionService:HasTag(character, "GlobalTraitor") then
+            local meleeTool = grabMelee()
+            if not meleeTool then
+                error("No listed melee could be acquired; final teleport canceled")
+            end
+
             teleportTo(GLOBAL_TRAITOR_CFRAME)
-            print("Global Traitor detected; teleported to the saved destination.")
+
+            if not equipMelee(meleeTool) then
+                error(("Failed to equip %s after the final teleport"):format(
+                    meleeTool.Name
+                ))
+            end
+
+            print(("Global Traitor detected; grabbed, teleported, and equipped %s."):format(
+                meleeTool.Name
+            ))
             return
         end
         task.wait(0.1)
